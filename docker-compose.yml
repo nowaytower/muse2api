@@ -13,8 +13,9 @@ services:
     container_name: muse2api
     restart: unless-stopped
     ports:
-      # 左边是宿主机端口；只走反代时把这一行改成 "127.0.0.1:${MUSE2API_HOST_PORT:-18610}:18610"
-      - "${MUSE2API_HOST_PORT:-18610}:18610"
+      # 默认只绑宿主机回环：公网用 服务器IP:端口 打不开，只能本机反代/SSH 隧道访问。
+      # 要允许局域网直连就把 .env 里的 MUSE2API_BIND_ADDR 改成 0.0.0.0
+      - "${MUSE2API_BIND_ADDR:-127.0.0.1}:${MUSE2API_HOST_PORT:-18610}:18610"
     env_file:
       - .env
     environment:
