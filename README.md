@@ -109,6 +109,8 @@ Extension 1.0.3 requires a manual reload in every browser profile. Update checks
 | 健康检查 | 容器 `HEALTHCHECK` 打 `/healthz`（免鉴权），`docker compose ps` 可直接看到 `healthy` |
 | 数据 | 全部落在 `/app/data`（账号、任务、媒体、缩略图），compose 里 bind mount 到 `./data` |
 
+**配置怎么传**：`docker-compose.yml` 只启动一个 `muse2api` 服务，全部环境变量写在同目录 `.env`，由 compose 的 `env_file` 整份注入容器——所以改 `.env` 就行，**不需要动 compose 文件**（只有容器内监听地址 `0.0.0.0` 和端口 `18610` 由 compose 固定，改了端口映射就进不来）。
+
 **上游更新怎么进来**：上游 `czg86389-hub/muse2api` 有新提交时，`sync-upstream` 工作流（每天 11:17）自动 `git merge upstream/main` 并推送，随后的 `docker` 工作流按新的 `version.json` 重新构建镜像。fork 自己的部署文件（`Dockerfile` / `docker-compose*.yml` / `.env.example` / `README.md` / `.gitattributes`）在 `.gitattributes` 里标了 `merge=ours`，**双方都改过时保留本地版本，所以同步不会冲突**；上游代码文件照常三方合并，真冲突时任务会失败并列出冲突文件，不会强推。也可以手动跑一次：仓库 → Actions → `sync-upstream` → Run workflow（可勾 `dry_run` 只看不推）。
 
 > 镜像部署请用 `docker compose pull` 升级，不要点管理页的「⚡ 一键在线升级并重启」：那个按钮改的是容器内文件，容器一重建就回滚，还会和镜像里的版本对不上。管理页的更新检测已默认指向本 fork（`MUSE2API_REPOSITORY`），显示"已是最新"即与镜像一致。
