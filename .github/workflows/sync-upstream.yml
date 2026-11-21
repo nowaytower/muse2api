@@ -1,0 +1,127 @@
+# 定时把上游 czg86389-hub/muse2api 的代码同步进来，并触发镜像重建
+#
+# 冲突策略：fork 只额外维护「部署层」（Dockerfile / docker-compose*.yml / .env.example /
+# README.md / .gitattributes），这些文件在 .gitattributes 里标了 merge=ours，
+# 本工作流合并前会 git config merge.ours.driver true —— 双方都改过时保留本地版本，不产生冲突。
+# 上游的代码文件（app.py / engine.py / store.py / version.json …）走正常三方合并，
+# 新功能、修复与版本号会照常进来；万一这些文件真的冲突，任务会失败并列出冲突文件，不会强推。
+name: sync-upstream
+
+on:
+  schedule:
+    # 每天 11:17（北京时间）检查一次上游
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只检查并合并到本地，不推送、不触发构建'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM: czg86389-hub/muse2api
+      BRANCH: main
+    steps:
+      - name: 检出 fork（完整历史，合并需要共同祖先）
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: 配置 git 身份与 ours 合并驱动
+        run: |
+          git config user.name "muse2api-sync-bot"
+          git config user.email "muse2api-sync-bot@users.noreply.github.com"
+          git config merge.ours.driver true
+
+      - name: 拉取上游
+        run: |
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --no-tags upstream "${BRANCH}"
+
+      - name: 判断上游是否有新提交
+        id: check
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor "upstream/${BRANCH}" HEAD; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "上游没有新提交，跳过"
+          else
+            echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+            echo "上游有 $(git rev-list --count HEAD..upstream/${BRANCH}) 个新提交："
+            git --no-pager log --oneline HEAD.."upstream/${BRANCH}" | head -20
+          fi
+
+      - name: 合并上游
+        if: steps.check.outputs.up_to_date == 'false'
+        id: merge
+        run: |
+          set -uo pipefail
+          base="$(git rev-parse HEAD)"
+          set +e
+          git merge --no-ff --no-edit "upstream/${BRANCH}" -m "chore(sync): 合并上游 ${UPSTREAM}@$(git rev-parse --short "upstream/${BRANCH}")"
+          code=$?
+          set -e
+          if [ "${code}" -ne 0 ]; then
+            echo "::error::合并产生冲突，已中止（不会覆盖任何本地内容）"
+            git diff --name-only --diff-filter=U | tee /tmp/conflicts.txt
+            {
+              echo "### 上游同步冲突"
+              echo
+              echo "以下文件需要人工处理（其余文件已按 ours 策略保留本地版本）："
+              echo '```'
+              cat /tmp/conflicts.txt || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            exit 1
+          fi
+          echo "base=${base}" >> "$GITHUB_OUTPUT"
+
+      - name: 报告上游对「本地拥有文件」的改动
+        if: steps.check.outputs.up_to_date == 'false' && steps.merge.outcome == 'success'
+        run: |
+          set -euo pipefail
+          {
+            echo "### 上游改动面"
+            echo
+            echo "代码文件（已自动合并）："
+            echo '```'
+            git --no-pager diff --stat "${{ steps.merge.outputs.base }}" "upstream/main" -- . ':(exclude)Dockerfile' ':(exclude)docker-compose.yml' ':(exclude)docker-compose.build.yml' ':(exclude).env.example' ':(exclude)README.md' ':(exclude).gitattributes' | tail -30
+            echo '```'
+            echo
+            echo "部署层文件（按 merge=ours 保留本地版本，上游若改过请人工比对）："
+            echo '```'
+            git --no-pager diff --stat "${{ steps.merge.outputs.base }}" "upstream/main" -- Dockerfile docker-compose.yml .env.example README.md || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 推送并触发镜像构建
+        if: steps.check.outputs.up_to_date == 'false' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:${BRANCH}"
+          # 用 GITHUB_TOKEN 推送不会自动触发其它工作流，这里显式派发一次镜像构建
+          gh workflow run docker.yml --ref "${BRANCH}"
+          echo "已推送并派发 docker 构建（tag 取自新的 version.json）"
+
+      - name: 汇总
+        run: |
+          if [ "${{ steps.check.outputs.up_to_date }}" = "true" ]; then
+            echo "上游无更新" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "已合并上游：$(git --no-pager log --oneline -1)" >> "$GITHUB_STEP_SUMMARY"
+          fi

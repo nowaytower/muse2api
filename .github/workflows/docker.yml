@@ -1,0 +1,188 @@
+# 构建并发布多架构镜像到 GHCR
+#   linux/amd64 跑在 ubuntu-latest（x86_64），linux/arm64 跑在 ubuntu-24.04-arm（aarch64）
+#   两台都是 GitHub 官方原生 runner，各自构建自己的架构，最后合并成一个多架构 manifest —— 全程不用 QEMU
+# 镜像：ghcr.io/nowaytower/muse2api
+# tag：latest（main）/ <version.json 版本> / sha-<短哈希> / vX.Y.Z（推 git tag 时）
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '额外推一个自定义 tag（可留空）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------- 版本号与 tag ----------
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tags: ${{ steps.tags.outputs.tags }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取 version.json 版本号
+        id: ver
+        run: |
+          version="$(python3 -c "import json;print(json.load(open('version.json'))['version'])")"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "版本号：${version}"
+
+      - name: 生成 tag 列表
+        id: tags
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          CUSTOM_TAG: ${{ inputs.tag }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          tags="${IMAGE}:${VERSION}"$'\n'"${IMAGE}:sha-${GITHUB_SHA::7}"
+          if [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; then
+            tags="${tags}"$'\n'"${IMAGE}:latest"
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tags="${tags}"$'\n'"${IMAGE}:${GITHUB_REF_NAME}"
+          fi
+          if [ -n "${CUSTOM_TAG}" ]; then
+            tags="${tags}"$'\n'"${IMAGE}:${CUSTOM_TAG}"
+          fi
+          {
+            echo 'tags<<EOF'
+            echo "${tags}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          echo "镜像 tag："; echo "${tags}"
+
+  # ---------- 每个架构在原生 runner 上构建 ----------
+  build:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 硬性校验：构建机架构必须等于目标架构，防止悄悄退回 QEMU 模拟
+      - name: 校验原生架构
+        run: |
+          set -euo pipefail
+          host_arch="$(uname -m)"
+          case "${{ matrix.platform }}" in
+            linux/amd64) want="x86_64" ;;
+            linux/arm64) want="aarch64" ;;
+            *) echo "::error::未知目标平台 ${{ matrix.platform }}"; exit 1 ;;
+          esac
+          echo "runner=${{ matrix.runner }} host_arch=${host_arch} target=${{ matrix.platform }}"
+          [ "${host_arch}" = "${want}" ] || { echo "::error::目标 ${want} 但构建机是 ${host_arch}，会走模拟，拒绝构建"; exit 1; }
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送 ${{ matrix.arch }}（按 digest 推）
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+            VERSION=${{ needs.meta.outputs.version }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: 记录 digest
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------- 合并双架构 manifest ----------
+  merge:
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 合并并打 tag
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+          TAGS: ${{ needs.meta.outputs.tags }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          sources=()
+          for f in /tmp/digests/*; do
+            sources+=("${IMAGE}@sha256:$(basename "$f")")
+          done
+          [ "${#sources[@]}" -ge 2 ] || { echo "::error::digest 不足（${#sources[@]}），拒绝合并"; exit 1; }
+          tag_args=()
+          while IFS= read -r t; do [ -n "$t" ] && tag_args+=("-t" "$t"); done <<< "${TAGS}"
+          printf '合并来源：%s\n' "${sources[@]}"
+          docker buildx imagetools create "${tag_args[@]}" "${sources[@]}"
+
+      - name: 校验并写摘要
+        env:
+          VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect "${IMAGE}:${VERSION}" | tee /tmp/inspect.txt
+          {
+            echo "### 镜像已发布"
+            echo
+            echo '```'
+            grep -E 'Name:|MediaType:|Platform:' /tmp/inspect.txt || true
+            echo '```'
+            echo
+            echo "拉取：\`docker pull ${IMAGE}:${VERSION}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

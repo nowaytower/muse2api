@@ -1,0 +1,12 @@
+# 源码构建覆盖文件（可选）
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# 生成镜像 muse2api:local，不影响官方 tag。
+services:
+  muse2api:
+    image: muse2api:local
+    build:
+      context: .
+      args:
+        # 国内构建机拉不到 Docker Hub 时可换成镜像加速地址
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim-bookworm}
+        BUILD_SHA: ${MUSE2API_TAG:-local}

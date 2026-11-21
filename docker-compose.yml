@@ -1,23 +1,79 @@
-version: '3.8'
+# muse2api —— Docker Compose 部署（直接用官方多架构镜像）
+#
+#   docker compose pull && docker compose up -d
+#
+# 官方镜像：ghcr.io/nowaytower/muse2api（linux/amd64 / linux/arm64 同一 tag，按机器自动选架构）
+# 配置写在同目录 .env（Compose 自动读取做变量替换），模板见 .env.example。
+# 想从源码构建：docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 services:
   muse2api:
-    build: .
-    image: muse2api:latest
+    image: ghcr.io/nowaytower/muse2api:${MUSE2API_TAG:-latest}
     container_name: muse2api
-    restart: always
+    restart: unless-stopped
+    # 让 PID 1 回收僵尸进程（Chromium 子进程多），退出信号也能正确传给 uvicorn
+    init: true
     ports:
-      - "18610:18610"
+      # 只走反代/隧道时把 MUSE2API_BIND_ADDR 设成 127.0.0.1
+      - "${MUSE2API_BIND_ADDR:-0.0.0.0}:${MUSE2API_HOST_PORT:-18610}:18610"
     environment:
-      # 管理与 API 鉴权 Key（从 .env 或宿主环境读取，留空则自动生成）
-      - MUSE2API_KEY=${MUSE2API_KEY:-}
-      # 服务对外基准 URL，如 https://your-domain.com（留空则管理前端自动检测当前域名）
-      - MUSE2API_PUBLIC_BASE=
-      # 超时配置（秒）
-      - MUSE2API_IMAGE_TIMEOUT=240
-      - MUSE2API_VIDEO_TIMEOUT=600
-      - MUSE2API_CHAT_TIMEOUT=300
+      TZ: ${TZ:-Asia/Shanghai}
+      MUSE2API_HOME: /app
+      MUSE2API_HOST: 0.0.0.0
+      # 容器内端口固定 18610，改外部端口用 MUSE2API_HOST_PORT
+      MUSE2API_PORT: "18610"
+      # 管理/API 鉴权 Key（留空则首次启动自动生成并打印到日志）
+      MUSE2API_KEY: ${MUSE2API_KEY:-}
+      # 对外基准地址（反代/隧道域名），留空则管理页自动用当前访问域名
+      MUSE2API_PUBLIC_BASE: ${MUSE2API_PUBLIC_BASE:-}
+      MUSE2API_CHROMIUM: /usr/bin/chromium
+      MUSE2API_CDP_PORT: ${MUSE2API_CDP_PORT:-19210}
+      MUSE2API_IMAGE_TIMEOUT: ${MUSE2API_IMAGE_TIMEOUT:-240}
+      MUSE2API_VIDEO_TIMEOUT: ${MUSE2API_VIDEO_TIMEOUT:-600}
+      MUSE2API_CHAT_TIMEOUT: ${MUSE2API_CHAT_TIMEOUT:-300}
+      MUSE2API_CONCURRENCY: ${MUSE2API_CONCURRENCY:-2}
+      MUSE2API_KEEPALIVE_DISABLED_ACCOUNTS: ${MUSE2API_KEEPALIVE_DISABLED_ACCOUNTS:-0}
+      # 参考图安全开关：默认关闭，仅可信单用户部署才考虑打开
+      MUSE2API_REF_IMAGE_LOCAL_FILES: ${MUSE2API_REF_IMAGE_LOCAL_FILES:-0}
+      MUSE2API_REF_IMAGE_PRIVATE_FETCH: ${MUSE2API_REF_IMAGE_PRIVATE_FETCH:-0}
+      # 管理页「更新检测」对比本 fork，避免镜像部署被提示"有新版本"却升级不了
+      MUSE2API_REPOSITORY: ${MUSE2API_REPOSITORY:-nowaytower/muse2api}
+      MUSE2API_REPO_REF: ${MUSE2API_REPO_REF:-main}
     volumes:
-      # 持久化账号配置、任务日志及媒体文件
+      # 账号、任务、媒体、缩略图都在这里，删容器不丢数据
       - ./data:/app/data
-    shm_size: '2gb' # 保证 Chromium 渲染多标签页时不因 /dev/shm 耗尽崩溃
+    # Chromium 多标签页渲染吃 /dev/shm，2g 能显著减少崩溃
+    shm_size: "2gb"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:18610/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    # 应用本身已用 --no-sandbox 启动 Chromium，禁止提权不影响它
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # 可选：Cloudflare Tunnel 出站暴露（无需公网 IP / 端口映射）
+  # 用法：.env 填 TUNNEL_TOKEN 后 docker compose --profile tunnel up -d
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: muse2api-tunnel
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:-}
+    depends_on:
+      muse2api:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

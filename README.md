@@ -95,31 +95,76 @@ Extension 1.0.3 requires a manual reload in every browser profile. Update checks
 
 ---
 
+## 🐳 官方镜像（多架构，本仓库自动构建）
+
+本 fork 在上游代码之上只维护「部署层」，镜像由 GitHub Actions 直接构建发布，**不需要在服务器上装 Python / Chromium，也不需要本机 docker build**。
+
+| 项目 | 说明 |
+|---|---|
+| 镜像 | `ghcr.io/nowaytower/muse2api` |
+| 架构 | `linux/amd64` + `linux/arm64`，同一个 tag，`docker compose pull` 按机器自动选 |
+| 构建方式 | `ubuntu-latest`（x86_64）与 `ubuntu-24.04-arm`（aarch64）两台**原生** runner 各建各的，再合并成多架构 manifest，全程无 QEMU 模拟 |
+| tag | `latest`（main 最新）、`<version.json 版本>`（如 `1.6.12`）、`sha-<短哈希>`、`vX.Y.Z`（推 git tag 时） |
+| 组件 | 已内置 Chromium、FFmpeg、中文字体与 tzdata，镜像体量偏大属正常 |
+| 健康检查 | 容器 `HEALTHCHECK` 打 `/healthz`（免鉴权），`docker compose ps` 可直接看到 `healthy` |
+| 数据 | 全部落在 `/app/data`（账号、任务、媒体、缩略图），compose 里 bind mount 到 `./data` |
+
+**上游更新怎么进来**：上游 `czg86389-hub/muse2api` 有新提交时，`sync-upstream` 工作流（每天 11:17）自动 `git merge upstream/main` 并推送，随后的 `docker` 工作流按新的 `version.json` 重新构建镜像。fork 自己的部署文件（`Dockerfile` / `docker-compose*.yml` / `.env.example` / `README.md` / `.gitattributes`）在 `.gitattributes` 里标了 `merge=ours`，**双方都改过时保留本地版本，所以同步不会冲突**；上游代码文件照常三方合并，真冲突时任务会失败并列出冲突文件，不会强推。也可以手动跑一次：仓库 → Actions → `sync-upstream` → Run workflow（可勾 `dry_run` 只看不推）。
+
+> 镜像部署请用 `docker compose pull` 升级，不要点管理页的「⚡ 一键在线升级并重启」：那个按钮改的是容器内文件，容器一重建就回滚，还会和镜像里的版本对不上。管理页的更新检测已默认指向本 fork（`MUSE2API_REPOSITORY`），显示"已是最新"即与镜像一致。
+
+---
+
 ## 🚀 极速部署
 
-### 方式一：Docker Compose（推荐，一行命令开箱即用）
+### 方式一：Docker Compose（推荐，官方镜像一条命令）
 
-1. **克隆代码并进入目录**：
+1. **建目录并取部署文件**（只需 compose + env 模板，不必克隆整个仓库）：
    ```bash
-   git clone https://github.com/czg86389-hub/muse2api.git
-   cd muse2api
+   mkdir -p /opt/muse2api && cd /opt/muse2api
+   curl -fsSLO https://raw.githubusercontent.com/nowaytower/muse2api/main/docker-compose.yml
+   curl -fsSL  https://raw.githubusercontent.com/nowaytower/muse2api/main/.env.example -o .env
    ```
 
-2. **配置环境变量（可选）**：
+2. **配置环境变量**：
    ```bash
-   cp .env.example .env
-   # 按需编辑 .env，建议修改 MUSE2API_KEY 为你自己的管理密钥
+   vi .env
    ```
-
-   Docker Compose 会读取 `.env` 中的 `MUSE2API_KEY`，不会再被 Compose 文件中的示例值覆盖。
+   ```ini
+   MUSE2API_KEY=m2a_换成你自己的密钥    # 必改，管理页与 API 都用它
+   MUSE2API_TAG=latest                 # 回滚时固定到版本号，如 1.6.12
+   MUSE2API_HOST_PORT=18610            # 宿主机端口
+   MUSE2API_PUBLIC_BASE=               # 走反代就填 https://api.example.com
+   MUSE2API_BIND_ADDR=0.0.0.0          # 只走反代/隧道时改成 127.0.0.1
+   ```
 
 3. **启动容器**：
    ```bash
+   docker compose pull     # 拉对应架构的镜像
    docker compose up -d
+   docker compose ps       # 等 Status 变成 Up ... (healthy)，首次约 40 秒
+   docker compose logs -f  # 看到 Uvicorn running on http://0.0.0.0:18610 即成功
    ```
 
 4. **访问管理面板**：
    打开浏览器访问：`http://<你的服务器IP>:18610/admin?key=<你的MUSE2API_KEY>`
+
+**升级 / 回滚**：
+
+```bash
+docker compose pull && docker compose up -d          # 升级到最新
+# 回滚：.env 里 MUSE2API_TAG=1.6.12（或 sha-xxxxxxx）后
+docker compose up -d
+```
+
+`data/` 挂在宿主机，升级、重建容器都不会丢账号与媒体。
+
+**本地从源码构建**（不想用 GHCR 时）：
+
+```bash
+git clone https://github.com/nowaytower/muse2api.git && cd muse2api
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
 
 ---
 
