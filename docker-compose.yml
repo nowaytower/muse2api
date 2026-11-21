@@ -18,7 +18,6 @@ services:
       - "${MUSE2API_HOST_PORT:-18610}:18610"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
-      MUSE2API_HOME: /app
       # 容器内监听地址，必须 0.0.0.0（否则宿主机端口映射进不来）；宿主机对外监听由上面 ports 决定
       MUSE2API_HOST: 0.0.0.0
       # 容器内端口固定 18610，改外部端口用 MUSE2API_HOST_PORT
@@ -27,8 +26,6 @@ services:
       MUSE2API_KEY: ${MUSE2API_KEY:-}
       # 对外基准地址（反代域名），留空则管理页自动用当前访问域名
       MUSE2API_PUBLIC_BASE: ${MUSE2API_PUBLIC_BASE:-}
-      MUSE2API_CHROMIUM: /usr/bin/chromium
-      MUSE2API_CDP_PORT: ${MUSE2API_CDP_PORT:-19210}
       MUSE2API_IMAGE_TIMEOUT: ${MUSE2API_IMAGE_TIMEOUT:-240}
       MUSE2API_VIDEO_TIMEOUT: ${MUSE2API_VIDEO_TIMEOUT:-600}
       MUSE2API_CHAT_TIMEOUT: ${MUSE2API_CHAT_TIMEOUT:-300}
