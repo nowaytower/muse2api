@@ -14,7 +14,7 @@ services:
     # 让 PID 1 回收僵尸进程（Chromium 子进程多），退出信号也能正确传给 uvicorn
     init: true
     ports:
-      # 只走反代/隧道时把 MUSE2API_BIND_ADDR 设成 127.0.0.1
+      # 只走反代时把 MUSE2API_BIND_ADDR 设成 127.0.0.1
       - "${MUSE2API_BIND_ADDR:-0.0.0.0}:${MUSE2API_HOST_PORT:-18610}:18610"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
@@ -24,7 +24,7 @@ services:
       MUSE2API_PORT: "18610"
       # 管理/API 鉴权 Key（留空则首次启动自动生成并打印到日志）
       MUSE2API_KEY: ${MUSE2API_KEY:-}
-      # 对外基准地址（反代/隧道域名），留空则管理页自动用当前访问域名
+      # 对外基准地址（反代域名），留空则管理页自动用当前访问域名
       MUSE2API_PUBLIC_BASE: ${MUSE2API_PUBLIC_BASE:-}
       MUSE2API_CHROMIUM: /usr/bin/chromium
       MUSE2API_CDP_PORT: ${MUSE2API_CDP_PORT:-19210}
@@ -58,22 +58,3 @@ services:
       options:
         max-size: "20m"
         max-file: "3"
-
-  # 可选：Cloudflare Tunnel 出站暴露（无需公网 IP / 端口映射）
-  # 用法：.env 填 TUNNEL_TOKEN 后 docker compose --profile tunnel up -d
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: muse2api-tunnel
-    restart: unless-stopped
-    profiles: ["tunnel"]
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:-}
-    depends_on:
-      muse2api:
-        condition: service_healthy
-    security_opt:
-      - no-new-privileges:true
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "2"
