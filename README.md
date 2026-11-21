@@ -133,9 +133,8 @@ Extension 1.0.3 requires a manual reload in every browser profile. Update checks
    ```ini
    MUSE2API_KEY=m2a_换成你自己的密钥    # 必改，管理页与 API 都用它
    MUSE2API_TAG=latest                 # 回滚时固定到版本号，如 1.6.12
-   MUSE2API_HOST_PORT=18610            # 宿主机端口
+   MUSE2API_HOST_PORT=18610            # 宿主机端口（容器内固定 18610）
    MUSE2API_PUBLIC_BASE=               # 走反代就填 https://api.example.com
-   MUSE2API_BIND_ADDR=0.0.0.0          # 只走反代时改成 127.0.0.1
    ```
 
 3. **启动容器**：

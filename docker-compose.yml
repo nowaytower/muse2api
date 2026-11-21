@@ -14,11 +14,12 @@ services:
     # 让 PID 1 回收僵尸进程（Chromium 子进程多），退出信号也能正确传给 uvicorn
     init: true
     ports:
-      # 只走反代时把 MUSE2API_BIND_ADDR 设成 127.0.0.1
-      - "${MUSE2API_BIND_ADDR:-0.0.0.0}:${MUSE2API_HOST_PORT:-18610}:18610"
+      # 左边是宿主机端口；只走反代时把这一行改成 "127.0.0.1:${MUSE2API_HOST_PORT:-18610}:18610"
+      - "${MUSE2API_HOST_PORT:-18610}:18610"
     environment:
       TZ: ${TZ:-Asia/Shanghai}
       MUSE2API_HOME: /app
+      # 容器内监听地址，必须 0.0.0.0（否则宿主机端口映射进不来）；宿主机对外监听由上面 ports 决定
       MUSE2API_HOST: 0.0.0.0
       # 容器内端口固定 18610，改外部端口用 MUSE2API_HOST_PORT
       MUSE2API_PORT: "18610"
