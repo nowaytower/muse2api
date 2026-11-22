@@ -2337,16 +2337,25 @@ async function loadRepoStatus(force){
     const bannerHighlights = LANG === 'en' ? (s.highlights_en || s.highlights) : s.highlights;
     $('updBannerVer').textContent = rVer + ' (' + (s.remote_sha || 'unknown') + ')';
     $('updBannerMsg').textContent = s.managed_deployment
-      ? (LANG === 'en' ? 'Rebuild and switch the configured image to update.' : '请从配置的仓库分支重建并切换镜像。')
+      ? (LANG === 'en'
+          ? 'This instance runs from an image. Update on the host with: docker compose pull && docker compose up -d'
+          : '本实例由镜像提供代码，更新请在部署目录执行：docker compose pull && docker compose up -d （面板内不执行容器内升级）')
       : ((bannerHighlights || [])[0] || s.remote_msg || state);
     banner.classList.toggle('show', !!s.has_update && !!s.remote_sha && s.remote_sha !== _dismissedSha);
     desc.innerHTML = `${LANG === 'en' ? 'Installed version: ' : '当前已部署版本：'}<code>${esc(lVer)}</code>（Commit: <code>${esc(s.local_sha || '—')}</code>） · ` +
       `${LANG === 'en' ? 'Update source: ' : '更新来源：'}<a href="${esc(s.repo_url)}" target="_blank">${esc(s.repo_url)}</a> / <code>${esc(s.repo_ref || 'main')}</code><br>` +
       `${LANG === 'en' ? 'Remote version: ' : '远端版本：'}<code>${esc(s.remote_version || '未知')}</code>（Commit: <code>${esc(s.remote_sha || '—')}</code>）` +
       (s.check_error ? `<br>${esc(s.check_error)}` : '') +
-      (s.managed_deployment ? '<br>此实例通过镜像部署，更新需从上述分支构建并切换容器。' : '');
+      (s.sha_differs && !s.has_update
+        ? '<br>远端提交只改了部署层文件（compose / README / 工作流），服务代码未变，镜像不需要更换。'
+        : '') +
+      (s.managed_deployment ? '<br>此实例通过镜像部署：更新用 <code>docker compose pull &amp;&amp; docker compose up -d</code>，面板不执行容器内升级。' : '');
     for (const id of ['btnRepoPull', 'btnBannerUpgrade']) {
-      const btn = $(id); if (btn) btn.disabled = !!s.managed_deployment;
+      const btn = $(id); if (!btn) continue;
+      btn.disabled = !!s.managed_deployment;
+      if (s.managed_deployment) {
+        btn.textContent = LANG === 'en' ? '📦 Image deploy · use docker compose' : '📦 镜像部署 · 请用 docker compose 更新';
+      }
     }
 
     let html = '';

@@ -119,7 +119,30 @@ Extension 1.0.3 requires a manual reload in every browser profile. Update checks
 
 **上游更新怎么进来**：上游 `czg86389-hub/muse2api` 有新提交时，`sync-upstream` 工作流（每天 11:17）自动 `git merge upstream/main` 并推送，随后的 `docker` 工作流按新的 `version.json` 重新构建镜像。fork 自己的部署文件（`Dockerfile` / `docker-compose*.yml` / `.env.example` / `README.md` / `.gitattributes`）在 `.gitattributes` 里标了 `merge=ours`，**双方都改过时保留本地版本，所以同步不会冲突**；上游代码文件照常三方合并，真冲突时任务会失败并列出冲突文件，不会强推。也可以手动跑一次：仓库 → Actions → `sync-upstream` → Run workflow（可勾 `dry_run` 只看不推）。
 
-> 镜像部署请用 `docker compose pull` 升级，不要点管理页的「⚡ 一键在线升级并重启」：那个按钮改的是容器内文件，容器一重建就回滚，还会和镜像里的版本对不上。管理页的更新检测已默认指向本 fork（`MUSE2API_REPOSITORY`），显示"已是最新"即与镜像一致。
+> 镜像部署请用 `docker compose pull` 升级，不要点管理页的「⚡ 一键在线升级并重启」：那个按钮改的是容器内文件，容器一重建就回滚，还会和镜像里的版本对不上。compose 已把 `MUSE2API_MANAGED_DEPLOYMENT` 固定为 `1`，管理页在镜像部署下会把升级按钮换成「📦 镜像部署 · 请用 docker compose 更新」，不会再执行容器内升级。
+
+**更新提醒到底怎么判定的**（面板显示「有更新」时先看这一段）：
+
+| 面板字段 | 来源 | 说明 |
+|---|---|---|
+| 当前已部署版本 `v1.6.12 (3ab0066)` | 镜像内置 `version.json` + 构建时烧入的 `MUSE2API_BUILD_SHA` | 是**这个容器**的代码指纹，不是仓库最新 |
+| 远端版本 `v1.6.12 (0d9ea34)` | `MUSE2API_REPOSITORY` 的 `main` 最新提交 + 该提交里的 `version.json` | 默认本 fork |
+| 判定 | 版本号不同，或提交差异里含非部署层文件 | 只改了 compose/README/工作流的提交**不算更新** |
+
+所以「刚部署完又提示有更新」几乎都是同一件事：**你拉的镜像比仓库最后一次构建早**。镜像构建完成到 `latest` 生效有 1~2 分钟延迟，夜里改一步、立刻 `up -d` 很容易停在上一版。核对与解决：
+
+```bash
+docker compose images            # 看当前容器用的镜像 ID/TAG
+docker inspect muse2api --format '{{index .Config.Env}}' | tr ' ' '\n' | grep BUILD_SHA   # 容器里烧的提交
+```
+
+```bash
+docker compose pull && docker compose up -d   # 拉到最新构建后提醒自然消失
+```
+
+如果面板里两个 Commit 已经一致、仍显示「有更新」，通常是远端 `version.json` 的版本号比镜像里的新（上游刚发版、镜像还在构建），等 Actions 跑完再 `pull` 一次即可。
+
+> 另注：GitHub 对 fork 的 `schedule` 触发并不总可靠（fork 默认可能不跑定时任务）。`sync-upstream` 除定时外随时可以在 Actions 页手动 Run workflow；如果你希望完全自动，可以在自己的服务器上加一条 crontab 调 `gh workflow run sync-upstream.yml -R nowaytower/muse2api`（需要带 `workflow` 权限的 token）。
 
 ---
 

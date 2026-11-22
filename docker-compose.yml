@@ -22,6 +22,11 @@ services:
       # 容器内必须监听全部网卡 + 固定 18610，否则端口映射进不来（覆盖 .env 同名值）
       MUSE2API_HOST: 0.0.0.0
       MUSE2API_PORT: "18610"
+      # 本实例的代码来自镜像：面板不再提供「一键在线升级」（容器内改动重启即丢），
+      # 更新一律在宿主机执行 docker compose pull && docker compose up -d
+      MUSE2API_MANAGED_DEPLOYMENT: "1"
+      # 更新检测对比的仓库：默认本 fork（每天跟随上游同步，镜像也从这里构建）
+      MUSE2API_REPOSITORY: ${MUSE2API_REPOSITORY:-nowaytower/muse2api}
     volumes:
       # 账号、任务、媒体、缩略图都在这里，删容器不丢数据
       - ./data:/app/data

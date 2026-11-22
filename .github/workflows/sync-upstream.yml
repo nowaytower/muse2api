@@ -34,7 +34,7 @@ jobs:
       BRANCH: main
     steps:
       - name: 检出 fork（完整历史，合并需要共同祖先）
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0

@@ -2629,6 +2629,14 @@ if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", REPO_SLUG):
 REPO_REF = os.environ.get("MUSE2API_REPO_REF", "main")
 REPO_URL = f"https://github.com/{REPO_SLUG}"
 MANAGED_DEPLOYMENT = os.environ.get("MUSE2API_MANAGED_DEPLOYMENT", "0") == "1"
+# 本仓库自有的「部署层」文件：Dockerfile / compose / README / 工作流等。
+# 判断是否有更新时，如果新旧提交之间只有这些文件不同，说明服务代码没变，
+# 镜像不需要重建，面板不该报「有新版本」（否则每次改 compose 都会误报）。
+FORK_DEPLOYMENT_FILES = {
+    "Dockerfile", "docker-compose.yml", "docker-compose.build.yml",
+    ".env.example", ".env.docker.example", ".gitattributes", ".dockerignore", "README.md",
+}
+FORK_DEPLOYMENT_PREFIXES = (".github/",)
 TRACKED_REPO_PATHS = [
     "app.py", "engine.py", "store.py", "cdp.py", "config.py", "proxy.py",
     "generation_timing.py", "thumbnails.py", "GENERATION_QUEUE.md", "VERSION_REPORTING.md",
@@ -2716,6 +2724,7 @@ def _check_update_sync(force: bool = False, _auto_upgrade: bool = False) -> dict
     if not local_sha and os.path.isfile(_installed_sha_file()):
         with open(_installed_sha_file()) as f:
             local_sha = f.read().strip()
+    local_sha_full = local_sha          # 完整 40 位，用于比较接口
     local_sha = local_sha[:7]
     local_dirty = False
     if has_git:
@@ -2756,13 +2765,34 @@ def _check_update_sync(force: bool = False, _auto_upgrade: bool = False) -> dict
     except Exception:
         errors.append("远端版本文件读取失败")
     verified = bool(local_sha and remote_sha and remote_version)
-    has_update = bool((local_sha and remote_sha and local_sha != remote_sha) or
-                      (remote_version and local_version != remote_version))
+    sha_differs = bool(local_sha and remote_sha and local_sha != remote_sha)
+    version_differs = bool(remote_version and local_version != remote_version)
+    # 代码是否真的变了：只比较非部署层文件。取不到比较结果时按「没变」处理，
+    # 宁可少报一次，也不要因为一次 compose/README 提交就在面板上误报有新版本。
+    code_changed = False
+    if sha_differs and re.fullmatch(r"[0-9a-f]{40}", local_sha_full or ""):
+        try:
+            response = requests.get(
+                f"https://api.github.com/repos/{REPO_SLUG}/compare/{local_sha_full}...{remote_commit}",
+                headers=headers, timeout=8)
+            response.raise_for_status()
+            changed = [str((f or {}).get("filename") or "") for f in (response.json().get("files") or [])]
+            code_changed = any(
+                not (name in FORK_DEPLOYMENT_FILES or name.startswith(FORK_DEPLOYMENT_PREFIXES))
+                for name in changed if name)
+        except Exception:
+            code_changed = False
+    if MANAGED_DEPLOYMENT:
+        # 镜像部署：代码没变、只是部署层提交不同 → 不需要换镜像，不算有更新
+        has_update = bool(version_differs or code_changed)
+    else:
+        has_update = bool(sha_differs or version_differs)
     data = {"repo_url": REPO_URL, "repo_ref": REPO_REF, "has_git": has_git,
             "local_version": local_version, "local_sha": local_sha,
             "remote_version": remote_version, "remote_sha": remote_sha, "remote_commit": remote_commit,
             "remote_msg": remote_msg, "remote_time": remote_time,
             "has_update": has_update, "up_to_date": (not has_update and not local_dirty) if verified else None,
+            "sha_differs": sha_differs, "code_changed": code_changed,
             "local_dirty": local_dirty,
             "check_error": "; ".join(errors), "managed_deployment": MANAGED_DEPLOYMENT,
             "highlights": highlights, "highlights_en": highlights_en,
