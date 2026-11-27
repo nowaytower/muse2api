@@ -115,7 +115,7 @@ jobs:
           set -euo pipefail
           git push origin "HEAD:${BRANCH}"
           # 用 GITHUB_TOKEN 推送不会自动触发其它工作流，这里显式派发一次镜像构建
-          gh workflow run docker.yml --ref "${BRANCH}"
+          gh workflow run docker.yml --repo "$GITHUB_REPOSITORY" --ref "${BRANCH}"
           echo "已推送并派发 docker 构建（tag 取自新的 version.json）"
 
       - name: 汇总
